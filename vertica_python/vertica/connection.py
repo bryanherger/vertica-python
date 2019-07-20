@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,9 +39,7 @@ from __future__ import print_function, division, absolute_import
 import logging
 import socket
 import ssl
-import os
 import getpass
-import errno
 import uuid
 from struct import unpack
 from collections import deque
@@ -50,6 +48,7 @@ from collections import deque
 from builtins import str
 from six import raise_from, string_types, integer_types
 
+import vertica_python
 from .. import errors
 from ..vertica import messages
 from ..vertica.cursor import Cursor
@@ -58,10 +57,8 @@ from ..vertica.messages.frontend_messages import CancelRequest
 from ..vertica.log import VerticaLogging
 
 DEFAULT_HOST = 'localhost'
-DEFAULT_USER = getpass.getuser()
 DEFAULT_PORT = 5433
 DEFAULT_PASSWORD = ''
-DEFAULT_READ_TIMEOUT = 600
 DEFAULT_LOG_LEVEL = logging.WARNING
 DEFAULT_LOG_PATH = 'vertica_python.log'
 ASCII = 'ascii'
@@ -103,7 +100,7 @@ class _AddressList(object):
                            ' must be a host string or a (host, port) tuple')
                 self._logger.error(err_msg)
                 raise TypeError(err_msg)
-        
+
         self._logger.debug('Address list: {0}'.format(list(self.address_deque)))
 
     def _append(self, host, port):
@@ -165,6 +162,14 @@ class _AddressList(object):
         return None
 
 
+def _generate_session_label():
+    return '{type}-{version}-{id}'.format(
+        type='vertica-python',
+        version=vertica_python.__version__,
+        id=uuid.uuid1()
+    )
+
+
 class Connection(object):
     def __init__(self, options=None):
         self.parameters = {}
@@ -177,17 +182,10 @@ class Connection(object):
         options = options or {}
         self.options = {key: value for key, value in options.items() if value is not None}
 
-        self.options.setdefault('host', DEFAULT_HOST)
-        self.options.setdefault('port', DEFAULT_PORT)
-        self.options.setdefault('user', DEFAULT_USER)
-        self.options.setdefault('database', self.options['user'])
-        self.options.setdefault('password', DEFAULT_PASSWORD)
-        self.options.setdefault('read_timeout', DEFAULT_READ_TIMEOUT)
-
         # Set up connection logger
         logger_name = 'vertica_{0}_{1}'.format(id(self), str(uuid.uuid4())) # must be a unique value
         self._logger = logging.getLogger(logger_name)
-        
+
         if 'log_level' not in self.options and 'log_path' not in self.options:
             # logger is disabled by default
             self._logger.disabled = True
@@ -197,6 +195,19 @@ class Connection(object):
             VerticaLogging.setup_file_logging(logger_name, self.options['log_path'],
                                               self.options['log_level'], id(self))
 
+        self.options.setdefault('host', DEFAULT_HOST)
+        self.options.setdefault('port', DEFAULT_PORT)
+        if 'user' not in self.options:
+            try:
+                self.options['user'] = getpass.getuser()
+            except Exception as e:
+                self._logger.error(
+                    "Failed to set default value for connection 'user': {}".format(str(e)))
+                raise KeyError('Connection option "user" is required')
+        self.options.setdefault('database', self.options['user'])
+        self.options.setdefault('password', DEFAULT_PASSWORD)
+        self.options.setdefault('session_label', _generate_session_label())
+
         self.address_list = _AddressList(self.options['host'], self.options['port'],
                                          self.options.get('backup_server_node', []), self._logger)
 
@@ -204,6 +215,11 @@ class Connection(object):
         self.options.setdefault('unicode_error', None)
         self._cursor = Cursor(self, self._logger, cursor_type=None,
                               unicode_error=self.options['unicode_error'])
+
+        # knob for using server-side prepared statements
+        self.options.setdefault('use_prepared_statements', False)
+        self._logger.debug('Connection prepared statements is {}'.format(
+                     'enabled' if self.options['use_prepared_statements'] else 'disabled'))
 
         self._logger.info('Connecting as user "{}" to database "{}" on host "{}" with port {}'.format(
                      self.options['user'], self.options['database'],
@@ -231,6 +247,7 @@ class Connection(object):
     # dbapi methods
     #############################################
     def close(self):
+        self._logger.info('Close the connection')
         try:
             self.write(messages.Terminate())
         finally:
@@ -315,6 +332,7 @@ class Connection(object):
 
     def balance_load(self, raw_socket):
         # Send load balance request and read server response
+        self._logger.debug('=> %s', messages.LoadBalanceRequest())
         raw_socket.sendall(messages.LoadBalanceRequest().get_message())
         response = raw_socket.recv(1)
 
@@ -325,6 +343,7 @@ class Connection(object):
                 self._logger.error(err_msg)
                 raise errors.MessageError(err_msg)
             res = BackendMessage.from_type(type_=response, data=raw_socket.recv(size-4))
+            self._logger.debug('<= %s', res)
             host = res.get_host()
             port = res.get_port()
             self._logger.info('Load balancing to host "{0}" on port {1}'.format(host, port))
@@ -340,6 +359,7 @@ class Connection(object):
             raw_socket.close()
             raw_socket = self.establish_connection()
         else:
+            self._logger.debug('<= LoadBalanceResponse: %s', response)
             self._logger.warning("Load balancing requested but not supported by server")
 
         return raw_socket
@@ -347,8 +367,10 @@ class Connection(object):
     def enable_ssl(self, raw_socket, ssl_options):
         from ssl import CertificateError, SSLError
         # Send SSL request and read server response
+        self._logger.debug('=> %s', messages.SslRequest())
         raw_socket.sendall(messages.SslRequest().get_message())
         response = raw_socket.recv(1)
+        self._logger.debug('<= SslResponse: %s', response)
         if response in ('S', b'S'):
             self._logger.info('Enabling SSL')
             try:
@@ -412,8 +434,8 @@ class Connection(object):
         if not isinstance(message, FrontendMessage):
             raise TypeError("invalid message: ({0})".format(message))
 
-        self._logger.debug('=> %s', message)
         sock = self._socket()
+        self._logger.debug('=> %s', message)
         try:
             for data in message.fetch_message():
                 try:
@@ -424,12 +446,8 @@ class Connection(object):
 
         except Exception as e:
             self.close_socket()
-            if str(e) == 'unsupported authentication method: 9':
-                raise errors.ConnectionError(
-                    'Error during authentication. Your password might be expired.')
-            else:
-                # noinspection PyTypeChecker
-                raise_from(errors.ConnectionError, e)
+            self._logger.error(str(e))
+            raise
 
     def close_socket(self):
         try:
@@ -442,32 +460,68 @@ class Connection(object):
         self.close()
         self.startup_connection()
 
-    def read_message(self):
-        try:
-            type_ = self.read_bytes(1)
-            size = unpack('!I', self.read_bytes(4))[0]
+    def is_asynchronous_message(self, message):
+        # Check if it is an asynchronous response message
+        # Note: ErrorResponse is a subclass of NoticeResponse
+        return (isinstance(message, messages.ParameterStatus) or
+            (isinstance(message, messages.NoticeResponse) and
+             not isinstance(message, messages.ErrorResponse)))
 
-            if size < 4:
-                raise errors.MessageError("Bad message size: {0}".format(size))
-            message = BackendMessage.from_type(type_, self.read_bytes(size - 4))
-            self._logger.debug('<= %s', message)
+    def handle_asynchronous_message(self, message):
+        if isinstance(message, messages.ParameterStatus):
+            self.parameters[message.name] = message.value
+        elif (isinstance(message, messages.NoticeResponse) and
+             not isinstance(message, messages.ErrorResponse)):
+            if getattr(self, 'notice_handler', None) is not None:
+                self.notice_handler(message)
+            else:
+                self._logger.warning(message.error_message())
+
+    def read_message(self):
+        while True:
+            try:
+                type_ = self.read_bytes(1)
+                size = unpack('!I', self.read_bytes(4))[0]
+                if size < 4:
+                    raise errors.MessageError("Bad message size: {0}".format(size))
+                message = BackendMessage.from_type(type_, self.read_bytes(size - 4))
+                self._logger.debug('<= %s', message)
+                self.handle_asynchronous_message(message)
+            except (SystemError, IOError) as e:
+                self.close_socket()
+                # noinspection PyTypeChecker
+                self._logger.error(e)
+                raise_from(errors.ConnectionError, e)
+            if not self.is_asynchronous_message(message):
+                break
+        return message
+
+    def read_expected_message(self, expected_types, error_handler=None):
+        # Reads a message and does some basic error handling.
+        # expected_types must be a class (e.g. messages.BindComplete) or a tuple of classes
+        message = self.read_message()
+        if isinstance(message, expected_types):
             return message
-        except (SystemError, IOError) as e:
-            self.close_socket()
-            # noinspection PyTypeChecker
-            raise_from(errors.ConnectionError, e)
+        elif isinstance(message, messages.ErrorResponse):
+            if error_handler is not None:
+                error_handler(message)
+            else:
+                raise errors.DatabaseError(message.error_message())
+        else:
+            msg = 'Received unexpected message type: {}. '.format(type(message).__name__)
+            if isinstance(expected_types, tuple):
+                msg += 'Expected types: {}'.format(", ".join([t.__name__ for t in expected_types]))
+            else:
+                msg += 'Expected type: {}'.format(expected_types.__name__)
+            self._logger.error(msg)
+            raise errors.MessageError(msg)
 
     def process_message(self, message):
         if isinstance(message, messages.ErrorResponse):
             raise errors.ConnectionError(message.error_message())
-        elif isinstance(message, messages.NoticeResponse):
-            if getattr(self, 'notice_handler', None) is not None:
-                self.notice_handler(message)
         elif isinstance(message, messages.BackendKeyData):
             self.backend_pid = message.pid
             self.backend_key = message.key
-        elif isinstance(message, messages.ParameterStatus):
-            self.parameters[message.name] = message.value
         elif isinstance(message, messages.ReadyForQuery):
             self.transaction_status = message.transaction_status
         elif isinstance(message, messages.CommandComplete):
@@ -509,18 +563,30 @@ class Connection(object):
         user = self.options['user'].encode(ASCII)
         database = self.options['database'].encode(ASCII)
         password = self.options['password'].encode(ASCII)
+        session_label = self.options['session_label'].encode(ASCII)
 
-        self.write(messages.Startup(user, database))
+        self.write(messages.Startup(user, database, session_label))
 
         while True:
             message = self.read_message()
 
             if isinstance(message, messages.Authentication):
                 # Password message isn't right format ("incomplete message from client")
-                if message.code != messages.Authentication.OK:
+                if message.code == messages.Authentication.OK:
+                    self._logger.info("User {} successfully authenticated"
+                        .format(self.options['user']))
+                elif message.code == messages.Authentication.CHANGE_PASSWORD:
+                    msg = "The password for user {} has expired".format(self.options['user'])
+                    self._logger.error(msg)
+                    raise errors.ConnectionError(msg)
+                elif message.code == messages.Authentication.PASSWORD_GRACE:
+                    self._logger.warning('The password for user {} will expire soon.'
+                        ' Please consider changing it.'.format(self.options['user']))
+                else:
                     self.write(messages.Password(password, message.code,
                                                  {'user': user,
-                                                  'salt': getattr(message, 'salt', None)}))
+                                                  'salt': getattr(message, 'salt', None),
+                                                  'usersalt': getattr(message, 'usersalt', None)}))
             else:
                 self.process_message(message)
 

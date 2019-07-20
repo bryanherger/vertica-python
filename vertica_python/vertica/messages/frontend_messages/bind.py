@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,33 +33,77 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+"""
+Bind message
+
+In the extended query protocol, the frontend sends a Bind message to bind values
+to parameter placeholders present in an existing prepared statement.
+
+The response is either BindComplete or ErrorResponse.
+"""
 
 from __future__ import print_function, division, absolute_import
 
 from struct import pack
+from six import string_types
 
 from ..message import BulkFrontendMessage
+from ....datatypes import VerticaType
+from ....compat import as_bytes
 
+UTF_8 = 'utf-8'
+BACKSLASH = b'\\'
+BACKSLASH_ESCAPE = b'\\134'
 
 class Bind(BulkFrontendMessage):
     message_id = b'B'
 
-    def __init__(self, portal_name, prepared_statement_name, parameter_values):
+    def __init__(self, portal_name, prepared_statement_name, parameter_values, parameter_type_oids):
         BulkFrontendMessage.__init__(self)
         self._portal_name = portal_name
         self._prepared_statement_name = prepared_statement_name
         self._parameter_values = parameter_values
+        self._parameter_type_oids = parameter_type_oids
 
     def read_bytes(self):
-        bytes_ = pack('!{0}sx{1}sxHH'.format(
-            len(self._portal_name), len(self._prepared_statement_name)),
-            self._portal_name, self._prepared_statement_name, 0, len(self._parameter_values))
+        utf_portal_name = self._portal_name.encode(UTF_8)
+        utf_prepared_statement_name = self._prepared_statement_name.encode(UTF_8)
 
-        for val in self._parameter_values.values():
-            if val is None:
-                bytes_ += pack('!I', [-1])
+        bytes_ = pack('!{0}sx{1}sx'.format(len(utf_portal_name), len(utf_prepared_statement_name)),
+                      utf_portal_name, utf_prepared_statement_name)
+
+        # Parameter format codes -- use the default format (text)
+        bytes_ += pack('!H', 0)
+
+        # Number of parameters
+        bytes_ += pack('!H', len(self._parameter_type_oids))
+
+        param_bytes_ = b''
+        for oid, val in zip(self._parameter_type_oids, self._parameter_values):
+            # Parameter type oids
+            bytes_ += pack('!I', oid)
+            # Parameter values
+            if val is None:  # -1 indicates a NULL parameter value
+                param_bytes_ += pack('!i', -1)
+            elif oid in (VerticaType.BINARY, VerticaType.VARBINARY, VerticaType.LONGVARBINARY):
+                # Encode binary data as UTF8 bytes
+                val = as_bytes(val)
+                # Escape the byte value \ with "\134"(octal for backslash)
+                val = val.replace(BACKSLASH, BACKSLASH_ESCAPE)
+                param_bytes_ += pack('!I{0}s'.format(len(val)), len(val), val)
             else:
-                bytes_ += pack('!I{0}s'.format(len(val)), len(val), val)
-        bytes_ += pack('!H', [0])
+                # Convert input to string
+                if oid == VerticaType.BOOL:
+                    val = '1' if str(val).lower() in ('t', 'true', 'y', 'yes', '1') else '0'
+                elif not isinstance(val, (string_types, bytes)):
+                    val = str(val)
+                # Encode string as UTF8 bytes
+                val = val.encode(UTF_8) if not isinstance(val, bytes) else val
+                param_bytes_ += pack('!I{0}s'.format(len(val)), len(val), val)
+
+        bytes_ += param_bytes_
+
+        # Result column format codes -- use the default format (text)
+        bytes_ += pack('!H', 0)
 
         return bytes_

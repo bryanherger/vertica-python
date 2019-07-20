@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,3 +58,6 @@ class TypeTestCase(VerticaPythonIntegrationTestCase):
         query = "SELECT {0}::boolean".format(value)
         res = self._query_and_fetchone(query)
         self.assertEqual(res[0], value)
+
+
+exec(TypeTestCase.createPrepStmtClass())

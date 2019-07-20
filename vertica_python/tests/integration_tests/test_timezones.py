@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -85,3 +85,6 @@ class TimeZoneTestCase(VerticaPythonIntegrationTestCase):
             ),
         ]
         self._test_ts(test_cases=test_cases)
+
+
+exec(TimeZoneTestCase.createPrepStmtClass())

@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,5 +52,8 @@ class LoadBalanceResponse(BackendMessage):
 
     def get_host(self):
         return self.host
+
+    def __str__(self):
+        return "LoadBalanceResponse: host={}, port={}".format(self.host, self.port)
 
 BackendMessage.register(LoadBalanceResponse)

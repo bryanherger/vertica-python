@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +36,7 @@
 
 from __future__ import print_function, division, absolute_import
 
-import os
+import os, errno
 import logging
 
 class VerticaLogging(object):
@@ -50,7 +50,7 @@ class VerticaLogging(object):
                  '%(message)s'.format(context)),
             datefmt='%Y-%m-%d %H:%M:%S')
         cls.ensure_dir_exists(logfile)
-        file_handler = logging.FileHandler(logfile)
+        file_handler = logging.FileHandler(logfile, encoding='utf-8')
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
         logger.setLevel(log_level)

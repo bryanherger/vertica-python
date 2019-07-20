@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -152,3 +152,5 @@ class DateParsingTestCase(VerticaPythonIntegrationTestCase):
         ]
         self._test_not_supported(test_cases=test_cases, msg='BC indicator -> BC indicator')
 
+
+exec(DateParsingTestCase.createPrepStmtClass())

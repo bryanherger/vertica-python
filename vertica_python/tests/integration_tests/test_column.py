@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,14 +40,17 @@ from .base import VerticaPythonIntegrationTestCase
 
 class ColumnTestCase(VerticaPythonIntegrationTestCase):
     def test_column_names_query(self):
-        columns = ['isocode', 'name']
+        columns = ['isocode', 'name', u'\uFF04']
 
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute("""
-                SELECT 'US' AS {0}, 'United States' AS {1}
-                UNION ALL SELECT 'CA', 'Canada'
-                UNION ALL SELECT 'MX', 'Mexico' """.format(*columns))
+            cur.execute(u"""
+                SELECT 'US' AS {0}, 'United States' AS {1}, 'USD' AS {2}
+                UNION ALL SELECT 'CA', 'Canada', 'CAD'
+                UNION ALL SELECT 'MX', 'Mexico', 'MXN' """.format(*columns))
             description = cur.description
 
         self.assertListEqual([d.name for d in description], columns)
+
+
+exec(ColumnTestCase.createPrepStmtClass())

@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +33,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+"""
+PortalSuspended message
+
+A PortalSuspended message indicates that a portal has stopped execution.
+Vertica does not support portals in the same way postgres does. A portal is
+never truly "suspended" because Vertica always returns all results, regardless
+of how many were requested in a Bind message. This effectively means
+PortalSuspended has the same meaning as a CommandComplete message. The only
+meaningful difference being PortalSuspended occurs during the extended query
+protocol, while CommandComplete happens with the simple query protocol.
+In the future, Vertica may change to restore semantics more similar to those
+intended by Postgres.
+"""
+
 from __future__ import print_function, division, absolute_import
 
 from ..message import BackendMessage
@@ -40,6 +54,9 @@ from ..message import BackendMessage
 
 class PortalSuspended(BackendMessage):
     message_id = b's'
+
+    def __init__(self, data):
+        BackendMessage.__init__(self)
 
 
 BackendMessage.register(PortalSuspended)

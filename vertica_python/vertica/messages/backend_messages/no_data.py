@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +40,9 @@ from ..message import BackendMessage
 
 class NoData(BackendMessage):
     message_id = b'n'
+
+    def __init__(self, data):
+        BackendMessage.__init__(self)
 
 
 BackendMessage.register(NoData)

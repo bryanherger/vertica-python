@@ -1,4 +1,4 @@
-# Copyright (c) 2018 Micro Focus or one of its affiliates.
+# Copyright (c) 2018-2019 Micro Focus or one of its affiliates.
 # Copyright (c) 2018 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,3 +62,6 @@ class ErrorTestCase(VerticaPythonIntegrationTestCase):
             with self.assertRaises(errors.DuplicateObject):
                 cur.execute(query)
             cur.execute("DROP TABLE IF EXISTS duplicate_table")
+
+
+exec(ErrorTestCase.createPrepStmtClass())
